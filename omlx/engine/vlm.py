@@ -38,7 +38,7 @@ from ..utils.image import (
     compute_image_hash,
     extract_images_from_messages,
 )
-from ..utils.tokenizer import get_tokenizer_config
+from ..utils.model_loading import load_vlm_model
 from .base import BaseEngine, GenerationOutput
 
 logger = logging.getLogger(__name__)
@@ -189,8 +189,6 @@ class VLMBatchedEngine(BaseEngine):
         if self._loaded:
             return
 
-        from mlx_vlm.utils import load as vlm_load
-
         from ..engine_core import AsyncEngineCore, EngineConfig
         from ..scheduler import SchedulerConfig
 
@@ -203,7 +201,7 @@ class VLMBatchedEngine(BaseEngine):
             # when torchvision is not available (extractors is None, `in` fails).
             # oMLX does not support video input, so we skip video processing.
             _patch_video_processor_bug()
-            return vlm_load(self._model_name)
+            return load_vlm_model(self._model_name)
 
         loop = asyncio.get_running_loop()
         self._vlm_model, self._processor = await loop.run_in_executor(

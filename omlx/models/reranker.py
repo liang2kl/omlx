@@ -21,6 +21,7 @@ from ..model_discovery import (
     CAUSAL_LM_RERANKER_ARCHITECTURES,
     SUPPORTED_RERANKER_ARCHITECTURES,
 )
+from ..utils.model_loading import load_text_model
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +148,9 @@ class MLXRerankerModel:
         return model, tokenizer
 
     def _load_causal_lm(self) -> Tuple[Any, Any]:
-        """Load a CausalLM-based reranker model using mlx-lm."""
-        from mlx_lm import load as mlx_lm_load
-
+        """Load a CausalLM-based reranker model."""
         model_path = str(self.model_name)
-        model, tokenizer_wrapper = mlx_lm_load(model_path)
+        model, tokenizer_wrapper = load_text_model(model_path)
 
         # mlx-lm returns a TokenizerWrapper; unwrap to get the underlying
         # transformers tokenizer which supports __call__ for batch encoding.

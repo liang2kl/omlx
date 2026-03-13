@@ -7,6 +7,7 @@ the oMLX codebase.
 """
 
 from .tokenizer import get_tokenizer_config, apply_qwen3_fix
+from .model_loading import load_text_model, load_vlm_model
 from .formatting import format_bytes as format_bytes_util
 from .hardware import (
     HardwareInfo,
@@ -29,6 +30,8 @@ __all__ = [
     # Tokenizer utilities
     "get_tokenizer_config",
     "apply_qwen3_fix",
+    "load_text_model",
+    "load_vlm_model",
     # Hardware utilities
     "HardwareInfo",
     "detect_hardware",

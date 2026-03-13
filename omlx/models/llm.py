@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 from typing import Iterator
 
+from ..utils.model_loading import load_text_model
 from ..utils.tokenizer import get_tokenizer_config
 
 logger = logging.getLogger(__name__)
@@ -73,8 +74,6 @@ class MLXLanguageModel:
             return
 
         try:
-            from mlx_lm import load
-
             logger.info(f"Loading model: {self.model_name}")
 
             # Build tokenizer config with model-specific fixes
@@ -83,7 +82,7 @@ class MLXLanguageModel:
                 trust_remote_code=self.trust_remote_code,
             )
 
-            self.model, self.tokenizer = load(
+            self.model, self.tokenizer = load_text_model(
                 self.model_name,
                 tokenizer_config=tokenizer_config,
             )
