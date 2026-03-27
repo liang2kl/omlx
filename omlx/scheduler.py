@@ -1031,6 +1031,11 @@ class Scheduler:
         # BatchGenerator - the actual batching engine
         self.batch_generator: Optional[BatchGenerator] = None
         self._current_sampler_params: Optional[Tuple] = None
+
+        # DFlash speculative decoding
+        self._draft_model: Any = None
+        self._draft_caches: Dict[int, List[Any]] = {}  # uid -> draft KV cache
+        self._dflash_hidden: Dict[int, Any] = {}  # uid -> target hidden states
         # Boundary cache snapshots for stateful non-sliceable caches (e.g., ArraysCache).
         # request_id -> {token_count -> snapshot_cache_or_None}
         # Multiple snapshots per request to support per-block ArraysCache state storage.
@@ -3067,6 +3072,7 @@ class Scheduler:
             # Remove from BatchGenerator to free internal KV cache
             if request_id in self.request_id_to_uid:
                 uid = self.request_id_to_uid[request_id]
+                self._cleanup_dflash(uid)
                 self._remove_uid_from_active_batch(uid)
                 if uid in self.uid_to_request_id:
                     del self.uid_to_request_id[uid]
@@ -3201,6 +3207,148 @@ class Scheduler:
             logger.info(f"Rescheduled {count} requests for re-prefill")
         return failed_ids
 
+    def set_draft_model(self, draft_model: Any) -> None:
+        """Set a DFlash draft model for speculative decoding."""
+        try:
+            from dflash_mlx.model import DFlashDraftModel
+        except ImportError:
+            logger.warning("dflash_mlx not available, speculative decoding disabled")
+            return
+        if not isinstance(draft_model, DFlashDraftModel):
+            logger.warning("Draft model is not a DFlashDraftModel, ignoring")
+            return
+        self._draft_model = draft_model
+        logger.info(
+            f"DFlash speculative decoding enabled: "
+            f"block_size={draft_model.config.block_size}, "
+            f"target_layers={draft_model.config.target_layer_ids}"
+        )
+
+    def _init_dflash_for_model(self) -> None:
+        """Patch target model and bind draft (called once, lazily)."""
+        if self._draft_model is None or not self.batch_generator:
+            return
+        if hasattr(self.batch_generator.model, "_hidden_states"):
+            return
+        from dflash_mlx.generate import _patch_model
+        _patch_model(self.batch_generator.model, self._draft_model.config.target_layer_ids)
+        self._draft_model.bind(self.batch_generator.model)
+        logger.info("DFlash: target model patched and draft bound")
+
+    def _ensure_dflash_cache(self, uid: int) -> bool:
+        """Create draft cache and capture hidden states if needed."""
+        if uid in self._draft_caches:
+            return True
+        self._init_dflash_for_model()
+        self._draft_caches[uid] = self._draft_model.make_cache()
+        model = self.batch_generator.model
+        if hasattr(model, "_hidden_states") and model._hidden_states[0] is not None:
+            hidden = mx.concatenate(model._hidden_states, axis=-1)
+            self._dflash_hidden[uid] = hidden
+            mx.eval(hidden)
+            return True
+        return False
+
+    def _can_dflash_step(self) -> bool:
+        """Check if DFlash speculative decode can run this step."""
+        if self._draft_model is None:
+            return False
+        if not self.batch_generator or not self.batch_generator.active_batch:
+            return False
+        if len(self.batch_generator.active_batch) != 1:
+            return False
+        uid = self.batch_generator.active_batch.uids[0]
+        try:
+            return self._ensure_dflash_cache(uid)
+        except Exception as e:
+            logger.warning(f"DFlash cache init failed: {e}")
+            return False
+
+    def _dflash_step(self) -> List[Any]:
+        """Execute one DFlash speculative decode step."""
+        from dflash_mlx.generate import speculative_step
+
+        batch = self.batch_generator.active_batch
+        uid = batch.uids[0]
+        draft_cache = self._draft_caches[uid]
+
+        # If hidden states not yet captured, run a normal step to populate them
+        if uid not in self._dflash_hidden:
+            responses = self.batch_generator.next()
+            model = self.batch_generator.model
+            if hasattr(model, "_hidden_states") and model._hidden_states[0] is not None:
+                hidden = mx.concatenate(model._hidden_states, axis=-1)
+                self._dflash_hidden[uid] = hidden
+                mx.eval(hidden)
+            return responses
+
+        bs = min(
+            self._draft_model.config.block_size,
+            batch.max_tokens[0] - batch.num_tokens[0],
+        )
+        if bs <= 1:
+            return self.batch_generator.next()
+
+        sampler = batch.samplers[0] or self.batch_generator.sampler
+
+        # Core speculative decode (draft → verify → accept → cache rewind)
+        result = speculative_step(
+            model=self.batch_generator.model,
+            draft=self._draft_model,
+            target_cache=batch.cache,
+            draft_cache=draft_cache,
+            hidden=self._dflash_hidden[uid],
+            current_token=batch.y[0].item(),
+            sampler=sampler,
+            block_size=bs,
+        )
+
+        self._dflash_hidden[uid] = result.new_hidden
+
+        # Build responses from result
+        responses = []
+        stop_tokens = self.batch_generator.stop_tokens
+        n = result.accepted
+        d_list = result.draft_tokens
+        v_list = result.verified_tokens
+
+        emit_tokens = [batch.y[0].item()]
+        emit_logprobs = [batch.logprobs[0]]
+        for i in range(n):
+            emit_tokens.append(d_list[i])
+            emit_logprobs.append(result.verified_logprobs[i].squeeze(0))
+
+        for token_val, lp in zip(emit_tokens, emit_logprobs):
+            batch.tokens[0] = mx.concatenate(
+                (batch.tokens[0], mx.array([token_val], mx.uint32))
+            )
+            batch.num_tokens[0] += 1
+            finish_reason = None
+            if token_val in stop_tokens:
+                finish_reason = "stop"
+            elif batch.num_tokens[0] >= batch.max_tokens[0]:
+                finish_reason = "length"
+            responses.append(
+                BatchGenerator.Response(
+                    uid=uid, token=token_val, logprobs=lp,
+                    finish_reason=finish_reason, prompt_cache=None,
+                )
+            )
+            if finish_reason is not None:
+                break
+
+        next_token = v_list[n] if n < len(v_list) else emit_tokens[-1]
+        batch.y = mx.array([next_token], mx.uint32)
+        batch.logprobs[0] = result.verified_logprobs[min(n, len(result.verified_logprobs) - 1)].squeeze(0)
+
+        logger.debug(f"DFlash: {n}/{len(d_list)} accepted")
+        return responses
+
+    def _cleanup_dflash(self, uid: int) -> None:
+        """Remove draft cache for a finished request."""
+        self._draft_caches.pop(uid, None)
+        self._dflash_hidden.pop(uid, None)
+
     def step(self) -> SchedulerOutput:
         """
         Execute one scheduling step with automatic error recovery.
@@ -3232,7 +3380,10 @@ class Scheduler:
 
             # Run generation step if we have running requests
             if self.batch_generator is not None and self.running:
-                responses = self.batch_generator.next()
+                if self._can_dflash_step():
+                    responses = self._dflash_step()
+                else:
+                    responses = self.batch_generator.next()
                 output.has_work = True
 
                 if responses:

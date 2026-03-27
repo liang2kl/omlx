@@ -44,6 +44,7 @@ class BatchedEngine(BaseEngine):
         scheduler_config: Any | None = None,
         stream_interval: int = 1,
         enable_thinking: bool | None = None,
+        draft_model_path: str | None = None,
     ):
         """
         Initialize the batched engine.
@@ -54,12 +55,14 @@ class BatchedEngine(BaseEngine):
             scheduler_config: Optional scheduler configuration
             stream_interval: Tokens to batch before streaming (1=every token)
             enable_thinking: Enable thinking mode for reasoning models (passed to chat_template_kwargs)
+            draft_model_path: Optional DFlash draft model path for speculative decoding
         """
         self._model_name = model_name
         self._trust_remote_code = trust_remote_code
         self._scheduler_config = scheduler_config
         self._stream_interval = stream_interval
         self._enable_thinking = enable_thinking
+        self._draft_model_path = draft_model_path
 
         self._model = None
         self._tokenizer = None
@@ -166,6 +169,20 @@ class BatchedEngine(BaseEngine):
         )
 
         await self._engine.engine.start()
+
+        # Load DFlash draft model for speculative decoding
+        if self._draft_model_path:
+            def _load_draft_sync():
+                from dflash_mlx.utils import load_draft
+                return load_draft(self._draft_model_path)
+
+            draft_model = await loop.run_in_executor(
+                get_mlx_executor(), _load_draft_sync
+            )
+            if draft_model is not None:
+                self._engine.engine.scheduler.set_draft_model(draft_model)
+                logger.info(f"DFlash draft model loaded: {self._draft_model_path}")
+
         self._loaded = True
         logger.info(f"BatchedEngine loaded: {self._model_name}")
 

@@ -197,12 +197,14 @@ def serve_command(args):
     # Initialize server
     # Note: pinned_models and default_model are managed via admin page (model_settings.json)
     # Sampling parameters (max_tokens, temperature, etc.) are per-model settings
+    draft_model = getattr(args, "draft_model", None)
     init_server(
         model_dirs=[str(d) for d in model_dirs],
         max_model_memory=settings.model.get_max_model_memory_bytes(),
         scheduler_config=scheduler_config,
         api_key=settings.auth.api_key,
         global_settings=settings,
+        draft_model_path=draft_model,
     )
 
     # Start server
@@ -372,6 +374,13 @@ Example directory structure:
             "Max total process memory as percentage of system RAM (10-99%%), "
             "'auto' (RAM - 8GB), or 'disabled'. Default: auto."
         ),
+    )
+
+    serve_parser.add_argument(
+        "--draft-model",
+        type=str,
+        default=None,
+        help="DFlash draft model for speculative decoding (e.g., z-lab/Qwen3.5-4B-DFlash)",
     )
 
     # Server options

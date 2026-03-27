@@ -75,6 +75,7 @@ class EnginePool:
         self,
         max_model_memory: int | None,
         scheduler_config: SchedulerConfig | None = None,
+        draft_model_path: str | None = None,
     ):
         """
         Initialize the engine pool.
@@ -83,12 +84,14 @@ class EnginePool:
             max_model_memory: Maximum memory for loaded models in bytes,
                 or None for no limit (disabled)
             scheduler_config: Configuration for BatchedEngine schedulers
+            draft_model_path: Optional DFlash draft model for speculative decoding
         """
         self._entries: dict[str, EngineEntry] = {}
         self._lock = asyncio.Lock()
         self._max_model_memory = max_model_memory
         self._current_model_memory = 0
         self._scheduler_config = scheduler_config or SchedulerConfig()
+        self._draft_model_path = draft_model_path
         self._process_memory_enforcer: object | None = None  # Set by server
 
     @property
@@ -485,6 +488,7 @@ class EnginePool:
                 engine = BatchedEngine(
                     model_name=entry.model_path,
                     scheduler_config=self._scheduler_config,
+                    draft_model_path=self._draft_model_path,
                 )
 
             try:

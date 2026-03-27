@@ -829,6 +829,7 @@ def init_server(
     scheduler_config=None,
     api_key: str | None = None,
     global_settings: object | None = None,
+    draft_model_path: str | None = None,
 ):
     """
     Initialize server with model directories for multi-model serving.
@@ -924,6 +925,7 @@ def init_server(
     _server_state.engine_pool = EnginePool(
         max_model_memory=max_model_memory,
         scheduler_config=scheduler_config,
+        draft_model_path=draft_model_path,
     )
 
     # Discover models (use pinned models from settings file)
