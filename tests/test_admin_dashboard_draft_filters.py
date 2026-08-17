@@ -48,7 +48,7 @@ def test_dflash_draft_filter_claims_muse_glimmer_assistant():
     # Meta's Muse Glimmer DFlash drafter is named "-assistant" and carries
     # no "dflash" name token; routing keys on config_model_type.
     assert "DFLASH_DRAFTER_CONFIG_MODEL_TYPES.has(configType)" in body
-    assert "dflash($|[-_/\\s])" in body
+    assert "dflash2?($|[-_/\\s])" in body
     assert "'muse_glimmer_assistant'" in js.split(
         "DFLASH_DRAFTER_CONFIG_MODEL_TYPES = new Set([", 1
     )[1].split("])", 1)[0]

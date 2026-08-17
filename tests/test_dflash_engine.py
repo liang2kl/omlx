@@ -1375,7 +1375,7 @@ class TestDFlashCachedTokensWiring:
         )
         fake_flow = SimpleNamespace(hit_tokens=4273)
 
-        def fake_stream_events(*, prompt_tokens, max_tokens):
+        def fake_stream_events(*, prompt_tokens, max_tokens, **_kwargs):
             return iter([summary]), fake_flow, [2]
 
         monkeypatch.setattr(engine, "_stream_dflash_events", fake_stream_events)

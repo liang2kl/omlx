@@ -6911,7 +6911,7 @@
                 if (DFLASH_DRAFTER_CONFIG_MODEL_TYPES.has(configType)) {
                     return true;
                 }
-                return /(^|[-_/\s])dflash($|[-_/\s])/i.test(this.draftModelSearchText(model));
+                return /(^|[-_/\s])dflash2?($|[-_/\s])/i.test(this.draftModelSearchText(model));
             },
 
             isVlmMtpDraftModel(model) {

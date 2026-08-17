@@ -1,10 +1,10 @@
-# DFlash-MLX Integration Report
+# DFlash / DFlash 2 MLX Integration Report
 
-Date: 2026-07-28
+Updated: 2026-08-17
 
 ## Overview
 
-DFlash is a block diffusion speculative decoding technique (arXiv:2602.06036) that accelerates LLM token generation by having a small draft model propose multiple tokens simultaneously, which the target model verifies in a single forward pass. The MLX implementation ([bstnxbt/dflash-mlx](https://github.com/bstnxbt/dflash-mlx)) has been integrated into oMLX as an experimental engine option.
+DFlash is a block diffusion speculative decoding technique (arXiv:2602.06036) that accelerates LLM token generation by having a small draft model propose multiple tokens simultaneously, which the target model verifies in a single forward pass. oMLX supports classic DFlash through [bstnxbt/dflash-mlx](https://github.com/bstnxbt/dflash-mlx) and DFlash 2 through the MLX reference runtime from [z-lab/dflash2](https://github.com/z-lab/dflash2).
 
 ---
 
@@ -30,8 +30,8 @@ API Request → server.py → engine_pool.py
                               │
                               ├─ dflash_max_ctx unset, or prompt below limit
                               │     └─ DFlashEngine
-                              │           └─ stream_dflash_generate()  [dflash-mlx]
-                              │                 └─ draft/verify loop (internal)
+                              │           ├─ DFlash → stream_dflash_generate()
+                              │           └─ DFlash 2 → reference MLX runtime
                               │
                               └─ configured limit reached
                                     └─ fallback engine (BatchedEngine / VLMBatchedEngine)
@@ -40,6 +40,8 @@ API Request → server.py → engine_pool.py
 
 DFlashEngine is a `BaseEngine` implementation that:
 - Loads target + draft models via `dflash_mlx.runtime.load_target_bundle()` / `load_draft_bundle()`
+- Detects `DFlash2DraftModel` checkpoints and uses the vendored z-lab MLX
+  loader and candidate-selector decode loop
 - Consumes structured events from `stream_dflash_generate()` (prefill, token, summary)
 - Bridges sync generation to async streaming via `asyncio.Queue`
 - Lazily replaces DFlash with a fallback engine when a configured context
@@ -54,6 +56,8 @@ DFlashEngine is a `BaseEngine` implementation that:
 | File | Role |
 |------|------|
 | `omlx/engine/dflash.py` | DFlashEngine class — BaseEngine impl, event consumer, fallback routing |
+| `omlx/engine/dflash2.py` | DFlash 2 detection, loading, quantization, and event adapter |
+| `omlx/patches/dflash2/vendor/model_mlx.py` | Vendored z-lab DFlash 2 MLX reference runtime |
 | `omlx/patches/dflash_laguna.py` | Laguna target adapter, gated drafter, fused-QKV loader, and mixed-cache rollback |
 | `omlx/engine/__init__.py` | DFlashEngine export (required dependency) |
 | `omlx/engine_pool.py` | DFlash routing: checks `dflash_enabled` before engine type switch |
@@ -68,6 +72,8 @@ DFlashEngine is a `BaseEngine` implementation that:
 ### Dependency
 
 - `dflash-mlx` pinned to `jundot/dflash-mlx` (v0.1.10+omlx.4)
+- DFlash 2 MLX runtime vendored from `z-lab/dflash2@c239472` under its MIT
+  license, avoiding the reference package's benchmark-only dependencies
 - Listed as required dependency in `pyproject.toml`; the mac-app release
   lockfiles are regenerated from it by the packaging pipeline
 
@@ -77,6 +83,7 @@ DFlash registers `QwenGdnTargetOps`, `Gemma4TargetOps`, and `MuseGlimmerTargetOp
 
 | Target model | Draft checkpoint |
 |--------------|-----------------|
+| mlx-community/Qwen3.8-27B-4bit | z-lab/Qwen3.8-27B-DFlash2 |
 | Qwen/Qwen3-4B | z-lab/Qwen3-4B-DFlash-b16 |
 | Qwen/Qwen3-8B | z-lab/Qwen3-8B-DFlash-b16 |
 | Qwen/Qwen3.5-4B | z-lab/Qwen3.5-4B-DFlash |
@@ -97,6 +104,14 @@ DFlash registers `QwenGdnTargetOps`, `Gemma4TargetOps`, and `MuseGlimmerTargetOp
 | meta-models/Muse-Glimmer-30B | meta-models/Muse-Glimmer-30B-assistant |
 
 Other model families (Llama, Gemma3, etc.) are not supported — they require both a trained DFlash draft checkpoint and a compatible target adapter in dflash-mlx.
+
+DFlash 2 on MLX currently follows z-lab's validated Qwen3.8-27B path. Its
+candidate selector supports exact rejection sampling with `temperature`,
+`top_p`, and `top_k`. When either target or draft is quantized, oMLX caps its
+verify block at five tokens as recommended by the reference implementation.
+The existing DFlash L1/L2 snapshot cache and verify/window tuning knobs apply
+only to the classic dflash-mlx backend; DFlash 2 requests currently start from
+a fresh prompt cache.
 
 Laguna target and draft checkpoints must be from the same size family and should
 use Poolside's quantization-matched draft when one is published (for example,

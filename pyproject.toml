@@ -258,6 +258,7 @@ include = ["omlx*"]
     "bench_corpora/*",
 ]
 "omlx.eval" = ["data/*.jsonl"]
+"omlx.patches.dflash2.vendor" = ["LICENSE"]
 "omlx.custom_kernels.glm_moe_dsa" = ["*.metallib", "*.dylib", "*.so"]
 "omlx.custom_kernels.minimax_m3" = ["*.metallib", "*.dylib", "*.so"]
 "omlx.custom_kernels.qwen35_prefill" = ["*.metallib", "*.dylib", "*.so"]
